@@ -36,8 +36,8 @@ exports.appointmentWebhook = async (req, res) => {
  */
 async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
-    const patientId = params.patient_id; // From Flow [cite: 5, 38]
-    const ssn4 = params.ssn4; // From Flow [cite: 6, 38]
+    const patientId = params.patient_id; // From Flow
+    const ssn4 = params.ssn4; // From Flow
 
     if (!patientId || !ssn4) {
         return res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
@@ -55,12 +55,12 @@ async function handleValidation(req, res) {
             sessionInfo: {
                 parameters: {
                     authenticated: true,
-                    patient_name: rows[0].patient_name // Used by Playbook [cite: 8]
+                    patient_name: rows[0].patient_name // Used by Playbook
                 }
             }
         });
     } else {
-        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } }); [cite: 9]
+        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
     }
 }
 
@@ -106,8 +106,8 @@ async function handleBooking(req, res) {
     await job.getQueryResults();
 
     if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
-        res.status(200).send({ success: true }); [cite: 62]
+        res.status(200).send({ success: true });
     } else {
-        res.status(409).send({ success: false, error: "Slot already booked" }); [cite: 20, 65]
+        res.status(409).send({ success: false, error: "Slot already booked" });
     }
 }
