@@ -1,0 +1,26 @@
+Create Dataset
+CREATE SCHEMA IF NOT EXISTS `appointment_system`;
+
+Create Master Patient Table
+CREATE TABLE IF NOT EXISTS `appointment_system.master_patient` (
+  patient_id STRING NOT NULL,
+  ssn4 STRING NOT NULL,
+  patient_name STRING,
+  phone_number STRING);
+
+Create Department Tables (Repeat for Cardiology, Ophthalmology)
+CREATE TABLE IF NOT EXISTS `appointment_system.radiology_slots` (
+  slot_id STRING NOT NULL,
+  slot_date DATE,
+  slot_time TIME,
+  status STRING, -- 'Available' or 'Booked'
+  patient_id STRING
+);
+
+Seed Sample Data
+INSERT INTO `appointment_system.master_patient` (patient_id, ssn4, patient_name)
+VALUES ('P123', '4455', 'John Doe');
+
+INSERT INTO `appointment_system.radiology_slots` (slot_id, slot_date, slot_time, status)
+VALUES ('R1', '2026-02-10', '10:00:00', 'Available'),
+       ('R2', '2026-02-10', '11:00:00', 'Available');
