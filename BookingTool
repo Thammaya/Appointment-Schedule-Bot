@@ -1,0 +1,62 @@
+openapi: 3.0.0
+info:
+  title: Appointment Booking Tool
+  description: Tool for marking an appointment slot as 'Booked' in the specific department's BigQuery table.
+  version: 1.0.0
+servers:
+  - url: https://YOUR_REGION-YOUR_PROJECT_ID.cloudfunctions.net/appointmentWebhook
+    description: Google Cloud Function Production Server
+paths:
+  /bookSlot:
+    post:
+      summary: Book a selected appointment slot
+      operationId: bookSlot
+      description: Mark a specific slot ID as 'Booked' for a validated patient.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - department
+                - slot_id
+                - patient_id
+              properties:
+                department:
+                  type: string
+                  description: The medical department where the slot is located (e.g., Radiology).
+                  example: "Radiology"
+                slot_id:
+                  type: string
+                  description: The unique ID of the slot to be booked.
+                  example: "R123"
+                patient_id:
+                  type: string
+                  description: The ID of the patient booking the slot.
+                  example: "P12345"
+      responses:
+        '200':
+          description: Appointment successfully booked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '409':
+          description: Slot conflict. The slot was already booked by another user.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '500':
+          description: Internal server error or BigQuery update failure.
