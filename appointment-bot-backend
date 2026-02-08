@@ -76,11 +76,10 @@ async function handleSlotRetrieval(req, res) {
 
     // Logic for "Next Three Available Slots"
     const limit = futureOnly ? 3 : 10;
-
     const query = `
         SELECT slot_id, slot_date, slot_time FROM \`${tableName}\`
         WHERE status = 'Available'
-        ORDER BY slot_date ASC, slot_time ASC LIMIT ${limit}`; [cite: 51, 55, 56, 57]
+        ORDER BY slot_date ASC, slot_time ASC LIMIT ${limit}`;
 
     const [slots] = await bigquery.query(query);
     res.status(200).send(slots); [cite: 11]
