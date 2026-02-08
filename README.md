@@ -1,7 +1,3 @@
-This revised **Low-Level Design (LLD)** includes the comprehensive **Session Parameter Map**. These parameters act as the "memory" of the bot, ensuring data collected in the Flow is available to the Playbook and the backend services without redundancy.
-
----
-
 ## 1. Solution Architecture Overview
 
 The project follows a **Hybrid Bot Architecture**. A deterministic **Flow** handles secure authentication, while a generative **Playbook** manages the dynamic conversation of scheduling.
