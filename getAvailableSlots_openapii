@@ -1,0 +1,52 @@
+openapi: 3.0.0
+info:
+  title: Appointment Scheduling Tool
+  description: Tool for retrieving available appointment slots from BigQuery via Cloud Functions.
+  version: 1.0.0
+servers:
+  - url: https://YOUR_REGION-YOUR_PROJECT_ID.cloudfunctions.net/appointmentWebhook
+    description: Google Cloud Function Production Server
+paths:
+  /getAvailableSlots:
+    post:
+      summary: Retrieve available appointment slots
+      operationId: getAvailableSlots
+      description: Fetches available slots for a specific department. [cite_start]Can also fetch the next three future slots if no immediate openings exist. [cite: 11, 53]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                department:
+                  type: string
+                  [cite_start]description: The medical department (Radiology, Cardiology, Ophthalmology). [cite: 10, 43]
+                  example: "Radiology"
+                futureOnly:
+                  type: boolean
+                  [cite_start]description: If true, retrieves the next three available future slots regardless of current date. [cite: 27, 53]
+                  default: false
+      responses:
+        '200':
+          [cite_start]description: A list of available slots. [cite: 11, 51]
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    slot_id:
+                      type: string
+                      description: Unique identifier for the appointment slot.
+                    slot_date:
+                      type: string
+                      format: date
+                      [cite_start]description: The date of the appointment. [cite: 47]
+                    slot_time:
+                      type: string
+                      format: time
+                      [cite_start]description: The time of the appointment. [cite: 48]
+        '500':
+          [cite_start]description: Backend or System Error. [cite: 32, 70]
