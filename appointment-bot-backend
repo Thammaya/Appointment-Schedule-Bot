@@ -1,0 +1,114 @@
+/**
+ * 1. INITIALIZATION: This is the 'BigQuery Command' the script needs.
+ * It establishes the connection to your GCP project.
+ */
+const { BigQuery } = require('@google-cloud/bigquery');
+const bigquery = new BigQuery();
+
+/**
+ * 2. ENTRY POINT: appointmentWebhook
+ */
+exports.appointmentWebhook = async (req, res) => {
+    const path = req.path;
+
+    try {
+        if (path === '/validatePatient') {
+            await handleValidation(req, res);
+        } else if (path === '/getAvailableSlots') {
+            await handleSlotRetrieval(req, res);
+        } else if (path === '/bookSlot') {
+            await handleBooking(req, res);
+        } else {
+            res.status(404).send({ error: "Endpoint not found" });
+        }
+    } catch (error) {
+        console.error('System Error:', error);
+        res.status(500).send({ 
+            fulfillment_response: { 
+                messages: [{ text: { text: ["A system error occurred. Please call back later."] } }] 
+            } 
+        }); [cite: 33, 70]
+    }
+};
+
+/**
+ * VALIDATION LOGIC
+ */
+async function handleValidation(req, res) {
+    const params = req.body.sessionInfo?.parameters || {};
+    const patientId = params.patient_id; // From Flow [cite: 5, 38]
+    const ssn4 = params.ssn4; // From Flow [cite: 6, 38]
+
+    if (!patientId || !ssn4) {
+        return res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
+    }
+
+    // This is the SQL command delegated to BigQuery
+    const query = `
+        SELECT patient_name FROM \`your-project-id.appointment_system.master_patient\`
+        WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
+    
+    const [rows] = await bigquery.query({ query, params: { pid: patientId, ssn: ssn4 } });
+
+    if (rows.length > 0) {
+        res.status(200).send({
+            sessionInfo: {
+                parameters: {
+                    authenticated: true,
+                    patient_name: rows[0].patient_name // Used by Playbook [cite: 8]
+                }
+            }
+        });
+    } else {
+        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } }); [cite: 9]
+    }
+}
+
+/**
+ * SLOT RETRIEVAL LOGIC
+ */
+async function handleSlotRetrieval(req, res) {
+    const { department, futureOnly } = req.body;
+
+    // Replace your-project-id in the code with your actual GCP Project ID.
+    
+      const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
+
+    // Logic for "Next Three Available Slots"
+    const limit = futureOnly ? 3 : 10;
+
+    const query = `
+        SELECT slot_id, slot_date, slot_time FROM \`${tableName}\`
+        WHERE status = 'Available'
+        ORDER BY slot_date ASC, slot_time ASC LIMIT ${limit}`; [cite: 51, 55, 56, 57]
+
+    const [slots] = await bigquery.query(query);
+    res.status(200).send(slots); [cite: 11]
+}
+
+/**
+ * BOOKING LOGIC
+ */
+async function handleBooking(req, res) {
+    const { department, slot_id, patient_id } = req.body;
+    const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
+
+    // Atomic Update Command
+    const query = `
+        UPDATE \`${tableName}\`
+        SET status = 'Booked', patient_id = @pid
+        WHERE slot_id = @sid AND status = 'Available'`;
+    
+    const [job] = await bigquery.createQueryJob({
+        query,
+        params: { pid: patient_id, sid: slot_id }
+    });
+    
+    await job.getQueryResults();
+
+    if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
+        res.status(200).send({ success: true }); [cite: 62]
+    } else {
+        res.status(409).send({ success: false, error: "Slot already booked" }); [cite: 20, 65]
+    }
+}
