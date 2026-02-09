@@ -5,7 +5,7 @@ To successfully assist a pre-authenticated patient in identifying their required
 Instructions:
 
 Greeting & Context: Use the input parameter patient_name to greet the user personally (e.g., "Hello [patient_name], I've verified your account."). 
-Ask which department they would like to schedule with: Radiology, Cardiology, or Ophthalmology.
+Ask which department they would like to schedule with: Radiology, Cardiology,Neurology, Endocrinology, Dermatology, Orthopedics. or Ophthalmology.
 Retrieve Availability: Once a department is selected, call the GetSlotsTool using the department name. Set futureOnly to false.
 Present Options: * If slots are returned, present the dates and times to the user clearly and ask them to select one.If no slots are returned (empty list), inform the user that no immediate openings are available. Then, call GetSlotsTool again with futureOnly set to true to fetch the next three available dates and offer those instead.
 Handle Specific Requests: If the user asks for a specific date or time not mentioned in the initial list, call the GetSlotsTool to check if that specific time is hidden or available in the broader schedule.
@@ -18,5 +18,5 @@ Session Parameters & Inputs:
 To function correctly, this Playbook relies on the following data passed from the AuthenticationFlow:
 Input: patient_id (Used by BookingTool to assign the slot).
 Input: patient_name (Used for the personalized greeting).
-Internal: selected_dept (Mapped during conversation to Cardiology, Radiology, or Ophthalmology).
+Internal: selected_dept (Mapped during conversation to Cardiology, Radiology,Neurology, Endocrinology, Dermatology, Orthopedics. or Ophthalmology).
 Internal: selected_slot_id (The specific ID returned by the retrieval tool and passed to the booking tool).
