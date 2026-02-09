@@ -1,17 +1,12 @@
 Page 1: Greeting_And_Confirmation
-
 Entry Fulfillment:
-
 Text: "Hello! I am the Appointment Scheduling Bot. Are you calling to book an appointment today?"
-
 Routes:
-
 Intent: confirm.yes * Transition to: Collect_Patient_ID
 Intent: confirm.no * Fulfillment: "I understand. Please tell me how else I can assist you."
 Transition to: Main_Menu (or End Session)
 
 Page 2: Collect_Patient_ID
-
 Entry Fulfillment:
 Text: "Great. To look up your records, please tell me your Patient ID."
 Parameters:
