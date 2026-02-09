@@ -1,0 +1,54 @@
+Page 1: Greeting_And_Confirmation
+
+Entry Fulfillment:
+
+Text: "Hello! I am the Appointment Scheduling Bot. Are you calling to book an appointment today?"
+
+Routes:
+
+Intent: confirm.yes * Transition to: Collect_Patient_ID
+Intent: confirm.no * Fulfillment: "I understand. Please tell me how else I can assist you."
+Transition to: Main_Menu (or End Session)
+
+Page 2: Collect_Patient_ID
+
+Entry Fulfillment:
+Text: "Great. To look up your records, please tell me your Patient ID."
+Parameters:
+Display Name: patient_id | Entity: @sys.number
+Routes:
+Condition: $page.params.patient_id != null
+Transition to: Collect_SSN4
+Intent: id.not_available (e.g., "I don't have it," "What is that?")
+Transition to: Collect_DOB
+
+Page 3: Collect_DOB (The ID Fallback)
+Entry Fulfillment:
+Text: "No problem. Let’s use your Date of Birth instead. What is your birthday?"
+Parameters:
+Display Name: dob | Entity: @sys.date
+Routes:
+Condition: $page.params.dob != null
+Transition to: Collect_SSN4
+
+Page 4: Collect_SSN4 (Mandatory Step)
+Entry Fulfillment:
+Text: "And finally, please provide the last four digits of your Social Security Number."
+Parameters:
+Display Name: ssn4 | Entity: @sys.number
+Routes:
+Condition: $page.params.ssn4 != null
+Transition to: Validation_Webhook_Call
+
+Page 5: Validation_Webhook_Call
+Entry Fulfillment:
+Webhook: Select your appointmentWebhook.
+Tag: validatePatient
+Routes:
+Condition: $session.params.authenticated = true
+Fulfillment: "Thank you. I’ve found your record, $session.params.patient_name."
+Transition to: Slot_Retrieval_Flow
+Condition: $session.params.authenticated = false
+Fulfillment: "I’m sorry, I couldn't verify those details. Let's try once more."
+Transition to: Collect_Patient_ID
+
