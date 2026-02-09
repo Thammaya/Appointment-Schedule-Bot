@@ -15,7 +15,7 @@ Page 2: Collect_Patient_ID
 Entry Fulfillment:
 Text: "Great. To look up your records, please tell me your Patient ID."
 Parameters:
-Display Name: patient_id | Entity: @sys.number
+Display Name: patient_id (Your custom Regexp entity: ^P[0-9]{3,8}$)
 Routes:
 Condition: $page.params.patient_id != null
 Transition to: Collect_SSN4
@@ -35,7 +35,7 @@ Page 4: Collect_SSN4 (Mandatory Step)
 Entry Fulfillment:
 Text: "And finally, please provide the last four digits of your Social Security Number."
 Parameters:
-Display Name: ssn4 | Entity: @sys.number
+Display Name: ssn4 (Your custom Regexp entity: ^[0-9]{4}$)
 Routes:
 Condition: $page.params.ssn4 != null
 Transition to: Validation_Webhook_Call
