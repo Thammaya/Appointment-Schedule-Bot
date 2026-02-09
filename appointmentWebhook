@@ -36,26 +36,40 @@ exports.appointmentWebhook = async (req, res) => {
  */
 async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
-    const patientId = params.patient_id; // From Flow
-    const ssn4 = params.ssn4; // From Flow
+    const patientId = params.patient_id; 
+    const dob = params.dob;
+    const ssn4 = params.ssn4;
 
-    if (!patientId || !ssn4) {
+    // SSN4 is mandatory; we need at least one of the other two
+    if (!ssn4 || (!patientId && !dob)) {
         return res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
     }
 
-    // This is the SQL command delegated to BigQuery
-    const query = `
-        SELECT patient_name FROM \`your-project-id.appointment_system.master_patient\`
-        WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
-    
-    const [rows] = await bigquery.query({ query, params: { pid: patientId, ssn: ssn4 } });
+    let query;
+    let queryParams;
+    if (patientId) {
+        // Scenario 1: User provided Patient ID
+        query = `
+            SELECT patient_name, patient_id FROM \`your-project-id.appointment_system.master_patient\`
+            WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
+        queryParams = { pid: patientId, ssn: ssn4 };
+    } else {
+        // Scenario 2: Fallback to DOB
+        query = `
+            SELECT patient_name, patient_id FROM \`your-project-id.appointment_system.master_patient\`
+            WHERE dob = @dob AND ssn4 = @ssn LIMIT 1`;
+        queryParams = { dob: dob, ssn: ssn4 };
+    }
+
+const [rows] = await bigquery.query({ query, params: queryParams });
 
     if (rows.length > 0) {
         res.status(200).send({
             sessionInfo: {
                 parameters: {
                     authenticated: true,
-                    patient_name: rows[0].patient_name // Used by Playbook
+                    patient_name: rows[0].patient_name,
+                    patient_id: rows[0].patient_id // Always store the ID for booking
                 }
             }
         });
