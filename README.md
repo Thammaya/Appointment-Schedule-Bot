@@ -69,5 +69,3 @@ These parameters are stored in the `$session.params` object and are passed betwe
 * **Parameter Passing:** In the Playbook settings, ensure "Track Session Parameters" is enabled so the `selected_dept` and `selected_slot_id` are available for debugging.
 * **Atomic Updates:** The BigQuery update logic must be atomic (`UPDATE ... WHERE status = 'Available'`) to ensure data integrity in high-volume environments.
 * **Data Privacy:** Use Dialogflow CX **Data Redaction** for the `ssn4` parameter to ensure sensitive data is not stored in plain text logs.
-
-**Next Step:** Would you like me to generate the **BigQuery SQL Table schemas** to match these session parameters and department lists?
