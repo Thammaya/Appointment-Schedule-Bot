@@ -6,7 +6,7 @@ const { BigQuery } = require('@google-cloud/bigquery');
 const bigquery = new BigQuery();
 
 /**
- * 2. ENTRY POINT: appointmentWebhook
+ * 2. ENTRY POINT: appointmentwebhook
  */
 exports.appointmentWebhook = async (req, res) => {
     const path = req.path;
