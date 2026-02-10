@@ -1,0 +1,6 @@
+curl -X POST "https://appointmentwebhook-1084364353491.us-central1.run.app/validatePatient" \
+  -H "Authorization: bearer $(gcloud auth print-identity-token)" \
+  -H "Content-Type: application/json" \
+  -d '{ "sessionInfo": { "parameters": { "patient_id": "P1001", "ssn4": "1234" } } }'
+
+  Ensure the Default Compute Service Account (or the specific one you used for deployment) has the BigQuery Data Editor and BigQuery User roles.
