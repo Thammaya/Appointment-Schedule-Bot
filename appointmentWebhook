@@ -1,12 +1,11 @@
 /**
- * 1. INITIALIZATION: This is the 'BigQuery Command' the script needs.
- * It establishes the connection to your GCP project.
+ * 1. INITIALIZATION
  */
 const { BigQuery } = require('@google-cloud/bigquery');
 const bigquery = new BigQuery();
 
 /**
- * 2. ENTRY POINT: appointmentwebhook
+ * 2. ENTRY POINT: appointmentWebhook
  */
 exports.appointmentWebhook = async (req, res) => {
     const path = req.path;
@@ -27,7 +26,7 @@ exports.appointmentWebhook = async (req, res) => {
             fulfillment_response: { 
                 messages: [{ text: { text: ["A system error occurred. Please call back later."] } }] 
             } 
-        }); [cite: 33, 70]
+        });
     }
 };
 
@@ -47,34 +46,41 @@ async function handleValidation(req, res) {
 
     let query;
     let queryParams;
+    
+    // Replace 'your-project-id' with your actual Project ID
+    const projectTable = `your-project-id.appointment_system.master_patient`;
+
     if (patientId) {
-        // Scenario 1: User provided Patient ID
         query = `
-            SELECT patient_name, patient_id FROM \`your-project-id.appointment_system.master_patient\`
+            SELECT patient_name, patient_id FROM \`${projectTable}\`
             WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
         queryParams = { pid: patientId, ssn: ssn4 };
     } else {
-        // Scenario 2: Fallback to DOB
         query = `
-            SELECT patient_name, patient_id FROM \`your-project-id.appointment_system.master_patient\`
+            SELECT patient_name, patient_id FROM \`${projectTable}\`
             WHERE dob = @dob AND ssn4 = @ssn LIMIT 1`;
         queryParams = { dob: dob, ssn: ssn4 };
     }
 
-const [rows] = await bigquery.query({ query, params: queryParams });
+    try {
+        const [rows] = await bigquery.query({ query, params: queryParams });
 
-    if (rows.length > 0) {
-        res.status(200).send({
-            sessionInfo: {
-                parameters: {
-                    authenticated: true,
-                    patient_name: rows[0].patient_name,
-                    patient_id: rows[0].patient_id // Always store the ID for booking
+        if (rows.length > 0) {
+            res.status(200).send({
+                sessionInfo: {
+                    parameters: {
+                        authenticated: true,
+                        patient_name: rows[0].patient_name,
+                        patient_id: rows[0].patient_id 
+                    }
                 }
-            }
-        });
-    } else {
-        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
+            });
+        } else {
+            res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
+        }
+    } catch (err) {
+        console.error("BQ Query Error:", err);
+        res.status(500).send({ error: "Database query failed" });
     }
 }
 
@@ -83,20 +89,20 @@ const [rows] = await bigquery.query({ query, params: queryParams });
  */
 async function handleSlotRetrieval(req, res) {
     const { department, futureOnly } = req.body;
+    const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
 
-    // Replace your-project-id in the code with your actual GCP Project ID.
-    
-      const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
-
-    // Logic for "Next Three Available Slots"
     const limit = futureOnly ? 3 : 10;
     const query = `
         SELECT slot_id, slot_date, slot_time FROM \`${tableName}\`
         WHERE status = 'Available'
         ORDER BY slot_date ASC, slot_time ASC LIMIT ${limit}`;
 
-    const [slots] = await bigquery.query(query);
-    res.status(200).send(slots); [cite: 11]
+    try {
+        const [slots] = await bigquery.query(query);
+        res.status(200).send(slots);
+    } catch (err) {
+        res.status(500).send({ error: "Failed to fetch slots" });
+    }
 }
 
 /**
@@ -106,22 +112,25 @@ async function handleBooking(req, res) {
     const { department, slot_id, patient_id } = req.body;
     const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
 
-    // Atomic Update Command
     const query = `
         UPDATE \`${tableName}\`
         SET status = 'Booked', patient_id = @pid
         WHERE slot_id = @sid AND status = 'Available'`;
     
-    const [job] = await bigquery.createQueryJob({
-        query,
-        params: { pid: patient_id, sid: slot_id }
-    });
-    
-    await job.getQueryResults();
+    try {
+        const [job] = await bigquery.createQueryJob({
+            query,
+            params: { pid: patient_id, sid: slot_id }
+        });
+        
+        await job.getQueryResults();
 
-    if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
-        res.status(200).send({ success: true });
-    } else {
-        res.status(409).send({ success: false, error: "Slot already booked" });
+        if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
+            res.status(200).send({ success: true });
+        } else {
+            res.status(409).send({ success: false, error: "Slot already booked" });
+        }
+    } catch (err) {
+        res.status(500).send({ error: "Booking failed" });
     }
 }
