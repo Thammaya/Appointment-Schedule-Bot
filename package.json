@@ -1,5 +1,16 @@
-{ 
-"name": "appointment-webhook-func", 
-"version": "1.0.0", 
-"dependencies": { "@google-cloud/bigquery": "^7.3.0" } 
+{
+  "name": "appointment-webhook",
+  "version": "1.0.0",
+  "description": "Webhook for BigQuery Appointment System",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/bigquery": "^7.0.0",
+    "@google-cloud/functions-framework": "^3.3.0"
+  },
+  "scripts": {
+    "start": "functions-framework --target=appointmentWebhook"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
 }
