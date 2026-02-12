@@ -1,11 +1,25 @@
 /**
- * 1. INITIALIZATION
+ * 1. INITIALIZATION & CONFIG
  */
 const { BigQuery } = require('@google-cloud/bigquery');
 const bigquery = new BigQuery();
 
+// Updated Allow-list with your new departments
+const ALLOWED_DEPARTMENTS = [
+    'cardiology', 
+    'orthopedics', 
+    'pediatrics', 
+    'general',
+    'neurology',
+    'endocrinology',
+    'dermatology'
+];
+
+const PROJECT_ID = 'sa-training-466722';
+const DATASET_ID = 'appointment_system';
+
 /**
- * 2. ENTRY POINT: appointmentWebhook
+ * 2. ENTRY POINT
  */
 exports.appointmentWebhook = async (req, res) => {
     const path = req.path;
@@ -22,76 +36,71 @@ exports.appointmentWebhook = async (req, res) => {
         }
     } catch (error) {
         console.error('System Error:', error);
-        res.status(500).send({ 
-            fulfillment_response: { 
-                messages: [{ text: { text: ["A system error occurred. Please call back later."] } }] 
-            } 
-        });
+        sendDialogflowResponse(res, "A system error occurred. Please call back later.");
     }
 };
 
 /**
- * VALIDATION LOGIC
+ * 3. VALIDATION LOGIC
  */
 async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
-    const patientId = params.patient_id; 
+    const patient_id = params.patient_id;
     const dob = params.dob;
     const ssn4 = params.ssn4;
-
-    // SSN4 is mandatory; we need at least one of the other two
-    if (!ssn4 || (!patientId && !dob)) {
+	
+    if (!ssn4 || (!patient_id && !dob)) {
         return res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
     }
 
-    let query;
-    let queryParams;
-    
-    // Replace 'your-project-id' with your actual Project ID
-    const projectTable = `your-project-id.appointment_system.master_patient`;
+    const projectTable = `${PROJECT_ID}.${DATASET_ID}.master_patient`;
+    let query, queryParams;
 
-    if (patientId) {
-        query = `
-            SELECT patient_name, patient_id FROM \`${projectTable}\`
-            WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
-        queryParams = { pid: patientId, ssn: ssn4 };
+    if (patient_id) {
+        query = `SELECT patient_name, patient_id FROM \`${projectTable}\` 
+                 WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
+        queryParams = { pid: patient_id, ssn: ssn4 };
     } else {
-        query = `
-            SELECT patient_name, patient_id FROM \`${projectTable}\`
-            WHERE dob = @dob AND ssn4 = @ssn LIMIT 1`;
+        query = `SELECT patient_name, patient_id FROM \`${projectTable}\` 
+                 WHERE dob = @dob AND ssn4 = @ssn LIMIT 1`;
         queryParams = { dob: dob, ssn: ssn4 };
     }
 
-    try {
-        const [rows] = await bigquery.query({ query, params: queryParams });
+    const [rows] = await bigquery.query({ query, params: queryParams });
 
-        if (rows.length > 0) {
-            res.status(200).send({
-                sessionInfo: {
-                    parameters: {
-                        authenticated: true,
-                        patient_name: rows[0].patient_name,
-                        patient_id: rows[0].patient_id 
-                    }
+    if (rows.length > 0) {
+        res.status(200).send({
+            sessionInfo: {
+                parameters: {
+                    authenticated: true,
+                    patient_name: rows[0].patient_name,
+                    patient_id: rows[0].patient_id 
                 }
-            });
-        } else {
-            res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
-        }
-    } catch (err) {
-        console.error("BQ Query Error:", err);
-        res.status(500).send({ error: "Database query failed" });
+            }
+        });
+    } else {
+        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
     }
 }
 
 /**
- * SLOT RETRIEVAL LOGIC
+ * 4. SLOT RETRIEVAL LOGIC
  */
 async function handleSlotRetrieval(req, res) {
-    const { department, futureOnly } = req.body;
-    const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
+    const params = req.body.sessionInfo?.parameters || {};
+    const rawDept = params.department || "";
+    const dept = rawDept.toLowerCase();
+    const futureOnly = params.futureOnly || false;
 
+    // Check if department is in our allowed list
+    if (!ALLOWED_DEPARTMENTS.includes(dept)) {
+        console.warn(`Attempted access to unauthorized department: ${dept}`);
+        return sendDialogflowResponse(res, `I'm sorry, we don't currently have a schedule available for ${rawDept}.`);
+    }
+
+    const tableName = `${PROJECT_ID}.${DATASET_ID}.${dept}_slots`;
     const limit = futureOnly ? 3 : 10;
+    
     const query = `
         SELECT slot_id, slot_date, slot_time FROM \`${tableName}\`
         WHERE status = 'Available'
@@ -99,19 +108,32 @@ async function handleSlotRetrieval(req, res) {
 
     try {
         const [slots] = await bigquery.query(query);
-        res.status(200).send(slots);
+        res.status(200).send({
+            sessionInfo: {
+                parameters: { available_slots: slots }
+            }
+        });
     } catch (err) {
+        console.error("Fetch error:", err);
         res.status(500).send({ error: "Failed to fetch slots" });
     }
 }
 
 /**
- * BOOKING LOGIC
+ * 5. BOOKING LOGIC
  */
 async function handleBooking(req, res) {
-    const { department, slot_id, patient_id } = req.body;
-    const tableName = `your-project-id.appointment_system.${department.toLowerCase()}_slots`;
+    const params = req.body.sessionInfo?.parameters || {};
+    const department = params.department;
+    const slot_id = params.slot_id;
+    const patient_id = params.patient_id;
+    
+    const dept = department?.toLowerCase();
+    if (!ALLOWED_DEPARTMENTS.includes(dept)) {
+        return sendDialogflowResponse(res, "Invalid department specified for booking.");
+    }
 
+    const tableName = `${PROJECT_ID}.${DATASET_ID}.${dept}_slots`;
     const query = `
         UPDATE \`${tableName}\`
         SET status = 'Booked', patient_id = @pid
@@ -126,11 +148,25 @@ async function handleBooking(req, res) {
         await job.getQueryResults();
 
         if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
-            res.status(200).send({ success: true });
+            res.status(200).send({ 
+                sessionInfo: { parameters: { booking_success: true } } 
+            });
         } else {
-            res.status(409).send({ success: false, error: "Slot already booked" });
+            sendDialogflowResponse(res, "I'm sorry, that slot was just taken. Please try another.");
         }
     } catch (err) {
+        console.error("Booking error:", err);
         res.status(500).send({ error: "Booking failed" });
     }
+}
+
+/**
+ * HELPER: Standard Dialogflow Text Response
+ */
+function sendDialogflowResponse(res, text) {
+    res.status(200).send({
+        fulfillment_response: {
+            messages: [{ text: { text: [text] } }]
+        }
+    });
 }
