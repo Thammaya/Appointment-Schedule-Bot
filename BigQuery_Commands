@@ -1,22 +1,22 @@
 Create Dataset
 CREATE SCHEMA IF NOT EXISTS `appointment_system`;
 
-CREATE TABLE IF NOT EXISTS `appointment_system.master_patient` (
+CREATE OR REPLACE TABLE `sa-training-466722.appointment_system.master_patient` (
   patient_id STRING NOT NULL,
-  ssn4 STRING NOT NULL,
+  ssn4 INT64 NOT NULL,
   patient_name STRING,
   phone_number STRING,
   dob DATE
 );
 
-INSERT INTO `appointment_system.master_patient` (patient_id, ssn4, patient_name, phone_number, dob)
-VALUES ('P1001', '1234', 'John Doe', '555-010-9988', '1985-05-15');
+INSERT INTO `sa-training-466722.appointment_system.master_patient` (patient_id, ssn4, patient_name, phone_number, dob)
+VALUES ('P1001', 1234, 'John Doe', '555-010-9988', '1985-05-15');
 
-INSERT INTO `appointment_system.master_patient` (patient_id, ssn4, patient_name, phone_number, dob)
+INSERT INTO `sa-training-466722.appointment_system.master_patient` (patient_id, ssn4, patient_name, phone_number, dob)
 VALUES 
-  ('P1002', '5678', 'Jane Smith', '555-010-1122', '1992-11-23'),
-  ('P1003', '9012', 'Michael Chen', '555-010-3344', '1978-02-10'),
-  ('P1004', '3456', 'Sarah Johnson', '555-010-5566', '2001-08-30');
+  ('P1002', 5678, 'Jane Smith', '555-010-1122', '1992-11-23'),
+  ('P1003', 9012, 'Michael Chen', '555-010-3344', '1978-02-10'),
+  ('P1004', 3456, 'Sarah Johnson', '555-010-5566', '2001-08-30');
 
 Create Department Tables (Repeat for Cardiology, Ophthalmology)
 CREATE TABLE IF NOT EXISTS `appointment_system.radiology_slots` (
