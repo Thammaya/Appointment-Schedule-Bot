@@ -92,7 +92,8 @@ async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
     const patient_id = params.patient_id;
     const dob = params.dob;
-    const ssn4 = params.ssn4;
+    const ssn4_input = params.ssn4;
+    const ssn4 = ssn4_input ? parseInt(ssn4_input, 10) : null;
     
     console.log('[VALIDATION] Attempting validation:', { 
         patient_id, 
