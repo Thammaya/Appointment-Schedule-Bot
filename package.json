@@ -1,16 +1,26 @@
 {
-  "name": "appointment-webhook",
+  "name": "appointment-booking-webhook",
   "version": "1.0.0",
-  "description": "Webhook for BigQuery Appointment System",
+  "description": "Dialogflow CX webhook for medical appointment booking system",
   "main": "index.js",
-  "dependencies": {
-    "@google-cloud/bigquery": "^7.0.0",
-    "@google-cloud/functions-framework": "^3.3.0"
-  },
   "scripts": {
-    "start": "functions-framework --target=appointmentWebhook"
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
-    "node": ">=20.0.0"
-  }
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^7.3.0"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "dialogflow",
+    "webhook",
+    "bigquery",
+    "appointment",
+    "healthcare"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }
