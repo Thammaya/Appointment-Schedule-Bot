@@ -1,15 +1,25 @@
 /**
- * 1. INITIALIZATION & CONFIG
+ * ============================================================================
+ * MEDICAL APPOINTMENT BOOKING WEBHOOK - CORRECTED FOR BIGQUERY SCHEMA
+ * ============================================================================
+ * Updated to work with DATE and TIME native types (not strings)
+ * ============================================================================
  */
+
 const { BigQuery } = require('@google-cloud/bigquery');
 const bigquery = new BigQuery();
 
-// Updated Allow-list with your new departments
+/**
+ * ============================================================================
+ * 1. CONFIGURATION & CONSTANTS
+ * ============================================================================
+ */
+
 const ALLOWED_DEPARTMENTS = [
     'cardiology', 
     'orthopedics', 
     'pediatrics', 
-    'general',
+    'radiology',
     'neurology',
     'endocrinology',
     'dermatology'
@@ -18,39 +28,88 @@ const ALLOWED_DEPARTMENTS = [
 const PROJECT_ID = 'sa-training-466722';
 const DATASET_ID = 'appointment_system';
 
+const SLOT_LIMITS = {
+    INITIAL: 10,
+    CUSTOM_DATE: 10
+};
+
+// Time range mappings
+const TIME_RANGES = {
+    'morning': { start: '06:00:00', end: '12:00:00' },
+    'afternoon': { start: '12:00:00', end: '17:00:00' },
+    'evening': { start: '17:00:00', end: '21:00:00' },
+    'early_morning': { start: '06:00:00', end: '09:00:00' },
+    'late_afternoon': { start: '15:00:00', end: '18:00:00' }
+};
+
 /**
- * 2. ENTRY POINT
+ * ============================================================================
+ * 2. MAIN ENTRY POINT
+ * ============================================================================
  */
 exports.appointmentWebhook = async (req, res) => {
     const path = req.path;
+    
+    console.log(`[${new Date().toISOString()}] Request to ${path}`);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     try {
-        if (path === '/validatePatient') {
-            await handleValidation(req, res);
-        } else if (path === '/getAvailableSlots') {
-            await handleSlotRetrieval(req, res);
-        } else if (path === '/bookSlot') {
-            await handleBooking(req, res);
-        } else {
-            res.status(404).send({ error: "Endpoint not found" });
+        switch (path) {
+            case '/validatePatient':
+                await handleValidation(req, res);
+                break;
+            
+            case '/getAvailableSlots':
+                await handleSlotRetrieval(req, res);
+                break;
+            
+            case '/bookSlot':
+                await handleBooking(req, res);
+                break;
+            
+            case '/health':
+                res.status(200).send({ 
+                    status: 'healthy', 
+                    timestamp: new Date().toISOString() 
+                });
+                break;
+            
+            default:
+                res.status(404).send({ error: "Endpoint not found" });
         }
     } catch (error) {
-        console.error('System Error:', error);
-        sendDialogflowResponse(res, "A system error occurred. Please call back later.");
+        console.error('[SYSTEM ERROR]:', error);
+        sendDialogflowResponse(res, "A system error occurred. Please try again later.");
     }
 };
 
 /**
- * 3. VALIDATION LOGIC
+ * ============================================================================
+ * 3. PATIENT VALIDATION LOGIC
+ * ============================================================================
  */
 async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
     const patient_id = params.patient_id;
     const dob = params.dob;
     const ssn4 = params.ssn4;
-	
+    
+    console.log('[VALIDATION] Attempting validation:', { 
+        patient_id, 
+        dob, 
+        ssn4: ssn4 ? '****' : 'missing' 
+    });
+    
     if (!ssn4 || (!patient_id && !dob)) {
-        return res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
+        console.log('[VALIDATION] Failed - insufficient data');
+        return res.status(200).send({ 
+            sessionInfo: { 
+                parameters: { 
+                    authenticated: false,
+                    validation_error: 'missing_data'
+                } 
+            } 
+        });
     }
 
     const projectTable = `${PROJECT_ID}.${DATASET_ID}.master_patient`;
@@ -66,61 +125,185 @@ async function handleValidation(req, res) {
         queryParams = { dob: dob, ssn: ssn4 };
     }
 
-    const [rows] = await bigquery.query({ query, params: queryParams });
+    try {
+        const [rows] = await bigquery.query({ query, params: queryParams });
 
-    if (rows.length > 0) {
-        res.status(200).send({
-            sessionInfo: {
-                parameters: {
-                    authenticated: true,
-                    patient_name: rows[0].patient_name,
-                    patient_id: rows[0].patient_id 
+        if (rows.length > 0) {
+            console.log('[VALIDATION] Success:', rows[0].patient_id);
+            res.status(200).send({
+                sessionInfo: {
+                    parameters: {
+                        authenticated: true,
+                        patient_name: rows[0].patient_name,
+                        patient_id: rows[0].patient_id,
+                        validation_error: null
+                    }
                 }
-            }
-        });
-    } else {
-        res.status(200).send({ sessionInfo: { parameters: { authenticated: false } } });
+            });
+        } else {
+            console.log('[VALIDATION] Failed - no matching patient');
+            res.status(200).send({ 
+                sessionInfo: { 
+                    parameters: { 
+                        authenticated: false,
+                        validation_error: 'no_match'
+                    } 
+                } 
+            });
+        }
+    } catch (err) {
+        console.error('[VALIDATION ERROR]:', err);
+        throw err;
     }
 }
 
 /**
- * 4. SLOT RETRIEVAL LOGIC
+ * ============================================================================
+ * 4. SLOT RETRIEVAL LOGIC (CORRECTED FOR DATE/TIME TYPES)
+ * ============================================================================
+ * CRITICAL FIXES:
+ * - slot_date is DATE type, not STRING (no PARSE_DATE needed)
+ * - slot_time is TIME type, use PARSE_TIME() for comparisons
+ * - Use native date/time functions
  */
 async function handleSlotRetrieval(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
     const rawDept = params.department || "";
-    const dept = rawDept.toLowerCase();
-    const futureOnly = params.futureOnly || false;
+    const dept = rawDept.toLowerCase().trim();
+    const requestType = params.requestType || "initial";
+    const preferred_date = params.preferred_date;        // Format: YYYY-MM-DD
+    const time_preference = params.time_preference;
+    const time_start = params.time_start;                // Format: HH:MM
+    const time_end = params.time_end;
+    
+    console.log('[SLOT RETRIEVAL]', { 
+        department: dept, 
+        requestType, 
+        preferred_date,
+        time_preference,
+        time_start,
+        time_end
+    });
 
-    // Check if department is in our allowed list
     if (!ALLOWED_DEPARTMENTS.includes(dept)) {
-        console.warn(`Attempted access to unauthorized department: ${dept}`);
-        return sendDialogflowResponse(res, `I'm sorry, we don't currently have a schedule available for ${rawDept}.`);
+        console.warn(`[SLOT RETRIEVAL] Unauthorized department: ${dept}`);
+        return sendDialogflowResponse(
+            res, 
+            `I'm sorry, we don't currently have a schedule available for ${rawDept}. ` +
+            `Available departments are: ${ALLOWED_DEPARTMENTS.join(', ')}.`
+        );
     }
 
     const tableName = `${PROJECT_ID}.${DATASET_ID}.${dept}_slots`;
-    const limit = futureOnly ? 3 : 10;
-    
-    const query = `
-        SELECT slot_id, slot_date, slot_time FROM \`${tableName}\`
-        WHERE status = 'Available'
-        ORDER BY slot_date ASC, slot_time ASC LIMIT ${limit}`;
+    let query, queryParams, limit;
+
+    switch (requestType) {
+        case "custom_date":
+            limit = SLOT_LIMITS.CUSTOM_DATE;
+            
+            // Determine time range
+            let startTime = null;
+            let endTime = null;
+            
+            if (time_preference && TIME_RANGES[time_preference]) {
+                startTime = TIME_RANGES[time_preference].start;
+                endTime = TIME_RANGES[time_preference].end;
+                console.log(`[SLOT RETRIEVAL] Using time preference: ${time_preference}`);
+            } else if (time_start && time_end) {
+                // Ensure TIME format includes seconds (HH:MM:SS)
+                startTime = time_start.includes(':') && time_start.split(':').length === 2 
+                    ? `${time_start}:00` 
+                    : time_start;
+                endTime = time_end.includes(':') && time_end.split(':').length === 2 
+                    ? `${time_end}:00` 
+                    : time_end;
+                console.log(`[SLOT RETRIEVAL] Using explicit time range: ${startTime} - ${endTime}`);
+            }
+            
+            if (startTime && endTime) {
+                // ✅ CORRECTED: Direct comparison with TIME type
+                query = `
+                    SELECT slot_id, slot_date, slot_time 
+                    FROM \`${tableName}\`
+                    WHERE status = 'Available' 
+                    AND slot_date = @preferred_date
+                    AND slot_time >= PARSE_TIME('%H:%M:%S', @start_time)
+                    AND slot_time < PARSE_TIME('%H:%M:%S', @end_time)
+                    ORDER BY slot_time ASC 
+                    LIMIT @limit`;
+                queryParams = { 
+                    preferred_date: preferred_date,
+                    start_time: startTime,
+                    end_time: endTime,
+                    limit: limit
+                };
+            } else {
+                // ✅ CORRECTED: slot_date is already DATE type
+                query = `
+                    SELECT slot_id, slot_date, slot_time 
+                    FROM \`${tableName}\`
+                    WHERE status = 'Available' 
+                    AND slot_date = @preferred_date
+                    ORDER BY slot_time ASC 
+                    LIMIT @limit`;
+                queryParams = { 
+                    preferred_date: preferred_date,
+                    limit: limit
+                };
+            }
+            break;
+
+        case "initial":
+        default:
+            limit = SLOT_LIMITS.INITIAL;
+            console.log('[SLOT RETRIEVAL] Querying CURRENT WEEK slots');
+            
+            // ✅ CORRECTED: slot_date is DATE type, use direct comparison
+            query = `
+                SELECT slot_id, slot_date, slot_time 
+                FROM \`${tableName}\`
+                WHERE status = 'Available'
+                AND slot_date >= CURRENT_DATE()
+                AND slot_date < DATE_ADD(DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY)), INTERVAL 7 DAY)
+                ORDER BY slot_date ASC, slot_time ASC 
+                LIMIT @limit`;
+            queryParams = { limit: limit };
+            break;
+    }
 
     try {
-        const [slots] = await bigquery.query(query);
+        const [slots] = await bigquery.query({ 
+            query, 
+            params: queryParams
+        });
+        
+        console.log(`[SLOT RETRIEVAL] Found ${slots.length} slots`);
+        
         res.status(200).send({
             sessionInfo: {
-                parameters: { available_slots: slots }
+                parameters: { 
+                    available_slots: slots,
+                    slot_count: slots.length,
+                    has_slots: slots.length > 0,
+                    no_slots: slots.length === 0,
+                    request_type: requestType,
+                    searched_date: preferred_date || null
+                }
             }
         });
     } catch (err) {
-        console.error("Fetch error:", err);
-        res.status(500).send({ error: "Failed to fetch slots" });
+        console.error("[SLOT RETRIEVAL ERROR]:", err);
+        res.status(500).send({ 
+            error: "Failed to fetch slots",
+            details: err.message 
+        });
     }
 }
 
 /**
+ * ============================================================================
  * 5. BOOKING LOGIC
+ * ============================================================================
  */
 async function handleBooking(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
@@ -128,40 +311,89 @@ async function handleBooking(req, res) {
     const slot_id = params.slot_id;
     const patient_id = params.patient_id;
     
-    const dept = department?.toLowerCase();
-    if (!ALLOWED_DEPARTMENTS.includes(dept)) {
+    console.log('[BOOKING ATTEMPT]', { 
+        department, 
+        slot_id, 
+        patient_id: patient_id ? '***' : 'missing'
+    });
+    
+    const dept = department?.toLowerCase().trim();
+    if (!dept || !ALLOWED_DEPARTMENTS.includes(dept)) {
+        console.warn(`[BOOKING] Invalid department: ${dept}`);
         return sendDialogflowResponse(res, "Invalid department specified for booking.");
     }
 
+    if (!slot_id || !patient_id) {
+        console.warn('[BOOKING] Missing required fields');
+        return sendDialogflowResponse(res, "Missing slot ID or patient information.");
+    }
+    
     const tableName = `${PROJECT_ID}.${DATASET_ID}.${dept}_slots`;
     const query = `
         UPDATE \`${tableName}\`
         SET status = 'Booked', patient_id = @pid
         WHERE slot_id = @sid AND status = 'Available'`;
     
+    const options = {
+        query: query,
+        params: { pid: patient_id, sid: slot_id }
+    };
+    
     try {
-        const [job] = await bigquery.createQueryJob({
-            query,
-            params: { pid: patient_id, sid: slot_id }
-        });
-        
-        await job.getQueryResults();
+        const [job] = await bigquery.createQueryJob(options);
+        console.log(`[BOOKING] Job ${job.id} started`);
 
-        if (job.metadata.statistics.query.numDmlAffectedRows > 0) {
+        await job.getQueryResults();
+        const [metadata] = await job.getMetadata();
+        const rowsAffected = parseInt(metadata.statistics.query.numDmlAffectedRows);
+
+        console.log(`[BOOKING] Rows updated: ${rowsAffected}`);
+
+        if (rowsAffected > 0) {
+            console.log(`[BOOKING] SUCCESS`);
+            
+            const detailQuery = `
+                SELECT slot_id, slot_date, slot_time, patient_id
+                FROM \`${tableName}\`
+                WHERE slot_id = @sid LIMIT 1`;
+            
+            const [slotDetails] = await bigquery.query({ 
+                query: detailQuery, 
+                params: { sid: slot_id }
+            });
+            
             res.status(200).send({ 
-                sessionInfo: { parameters: { booking_success: true } } 
+                sessionInfo: { 
+                    parameters: { 
+                        booking_success: true,
+                        booked_slot_id: slot_id,
+                        booked_slot_date: slotDetails[0]?.slot_date?.value || null,
+                        booked_slot_time: slotDetails[0]?.slot_time?.value || null
+                    } 
+                } 
             });
         } else {
-            sendDialogflowResponse(res, "I'm sorry, that slot was just taken. Please try another.");
+            console.warn(`[BOOKING] FAILED - Slot not available`);
+            
+            sendDialogflowResponse(
+                res, 
+                "I'm sorry, that slot is no longer available. Please select a different time."
+            );
         }
+
     } catch (err) {
-        console.error("Booking error:", err);
-        res.status(500).send({ error: "Booking failed" });
+        console.error("[BOOKING ERROR]:", err);
+        sendDialogflowResponse(
+            res, 
+            "We encountered a technical issue while booking. Please try again."
+        );
     }
 }
 
 /**
- * HELPER: Standard Dialogflow Text Response
+ * ============================================================================
+ * 6. HELPER FUNCTIONS
+ * ============================================================================
  */
 function sendDialogflowResponse(res, text) {
     res.status(200).send({
