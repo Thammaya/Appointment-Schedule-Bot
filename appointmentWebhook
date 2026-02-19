@@ -1,11 +1,21 @@
 /**
  * ============================================================================
- * MEDICAL APPOINTMENT BOOKING WEBHOOK - CORRECTED FOR BIGQUERY SCHEMA
+ * MEDICAL APPOINTMENT BOOKING WEBHOOK - CLOUD RUN FUNCTIONS VERSION
  * ============================================================================
- * Updated to work with DATE and TIME native types (not strings)
+ * Uses @google-cloud/functions-framework for Cloud Run Functions.
+ * Routes requests using fulfillmentInfo.tag from Dialogflow CX request body.
+ *
+ * Single Webhook URL in Dialogflow CX:
+ *   https://appointmentwebhook-137470913560.us-east1.run.app
+ *
+ * Set the "tag" field in each Dialogflow CX webhook call to:
+ *   - validatePatient
+ *   - getAvailableSlots
+ *   - bookSlot
  * ============================================================================
  */
 
+const functions = require('@google-cloud/functions-framework');
 const { BigQuery } = require('@google-cloud/bigquery');
 const bigquery = new BigQuery();
 
@@ -16,9 +26,9 @@ const bigquery = new BigQuery();
  */
 
 const ALLOWED_DEPARTMENTS = [
-    'cardiology', 
-    'orthopedics', 
-    'pediatrics', 
+    'cardiology',
+    'orthopedics',
+    'pediatrics',
     'radiology',
     'neurology',
     'endocrinology',
@@ -33,12 +43,11 @@ const SLOT_LIMITS = {
     CUSTOM_DATE: 10
 };
 
-// Time range mappings
 const TIME_RANGES = {
-    'morning': { start: '06:00:00', end: '12:00:00' },
-    'afternoon': { start: '12:00:00', end: '17:00:00' },
-    'evening': { start: '17:00:00', end: '21:00:00' },
-    'early_morning': { start: '06:00:00', end: '09:00:00' },
+    'morning':        { start: '06:00:00', end: '12:00:00' },
+    'afternoon':      { start: '12:00:00', end: '17:00:00' },
+    'evening':        { start: '17:00:00', end: '21:00:00' },
+    'early_morning':  { start: '06:00:00', end: '09:00:00' },
     'late_afternoon': { start: '15:00:00', end: '18:00:00' }
 };
 
@@ -46,47 +55,60 @@ const TIME_RANGES = {
  * ============================================================================
  * 2. MAIN ENTRY POINT
  * ============================================================================
+ * Single Cloud Run Function registered with functions-framework.
+ * Routes requests using fulfillmentInfo.tag from the Dialogflow CX body.
+ * All Dialogflow CX webhooks POST to the root path "/", so req.path
+ * is NOT used for routing — the tag field is used instead.
  */
-exports.appointmentWebhook = async (req, res) => {
-    const path = req.path;
-    
-    console.log(`[${new Date().toISOString()}] Request to ${path}`);
+functions.http('appointmentWebhook', async (req, res) => {
+    const tag = req.body.fulfillmentInfo?.tag;
+
+    console.log(`[${new Date().toISOString()}] Webhook called with tag: ${tag}`);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     try {
-        switch (path) {
-            case '/validatePatient':
+        switch (tag) {
+            case 'validatePatient':
                 await handleValidation(req, res);
                 break;
-            
-            case '/getAvailableSlots':
+
+            case 'getAvailableSlots':
                 await handleSlotRetrieval(req, res);
                 break;
-            
-            case '/bookSlot':
+
+            case 'bookSlot':
                 await handleBooking(req, res);
                 break;
-            
-            case '/health':
-                res.status(200).send({ 
-                    status: 'healthy', 
-                    timestamp: new Date().toISOString() 
-                });
-                break;
-            
+
             default:
-                res.status(404).send({ error: "Endpoint not found" });
+                console.warn(`[WARNING] Unknown or missing tag: "${tag}"`);
+                res.status(400).send({
+                    error: `Unknown or missing tag: "${tag}". ` +
+                           `Expected one of: validatePatient, getAvailableSlots, bookSlot.`
+                });
         }
     } catch (error) {
         console.error('[SYSTEM ERROR]:', error);
         sendDialogflowResponse(res, "A system error occurred. Please try again later.");
     }
-};
+});
 
 /**
  * ============================================================================
  * 3. PATIENT VALIDATION LOGIC
  * ============================================================================
+ * Tag: "validatePatient"
+ *
+ * Required session parameters:
+ *   - ssn4        : last 4 digits of SSN (integer)
+ *   - patient_id  : patient ID (optional if dob is provided)
+ *   - dob         : date of birth YYYY-MM-DD or struct {year, month, day}
+ *
+ * Returns session parameters:
+ *   - authenticated    : true/false
+ *   - patient_name     : name of patient (if authenticated)
+ *   - patient_id       : patient ID (if authenticated)
+ *   - validation_error : 'missing_data' | 'no_match' | null
  */
 async function handleValidation(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
@@ -94,22 +116,22 @@ async function handleValidation(req, res) {
     const dob = params.dob;
     const ssn4_input = params.ssn4;
     const ssn4 = ssn4_input ? parseInt(ssn4_input, 10) : null;
-    
-    console.log('[VALIDATION] Attempting validation:', { 
-        patient_id, 
-        dob, 
-        ssn4: ssn4 ? '****' : 'missing' 
+
+    console.log('[VALIDATION] Attempting validation:', {
+        patient_id,
+        dob,
+        ssn4: ssn4 ? '****' : 'missing'
     });
-    
+
     if (!ssn4 || (!patient_id && !dob)) {
         console.log('[VALIDATION] Failed - insufficient data');
-        return res.status(200).send({ 
-            sessionInfo: { 
-                parameters: { 
+        return res.status(200).send({
+            sessionInfo: {
+                parameters: {
                     authenticated: false,
                     validation_error: 'missing_data'
-                } 
-            } 
+                }
+            }
         });
     }
 
@@ -117,13 +139,28 @@ async function handleValidation(req, res) {
     let query, queryParams;
 
     if (patient_id) {
-        query = `SELECT patient_name, patient_id FROM \`${projectTable}\` 
+        query = `SELECT patient_name, patient_id FROM \`${projectTable}\`
                  WHERE patient_id = @pid AND ssn4 = @ssn LIMIT 1`;
         queryParams = { pid: patient_id, ssn: ssn4 };
     } else {
-        query = `SELECT patient_name, patient_id FROM \`${projectTable}\` 
+        // Convert DOB struct to YYYY-MM-DD string
+        let dobDate;
+        
+        if (typeof dob === 'object' && dob.year && dob.month && dob.day) {
+            // It's a struct - convert to YYYY-MM-DD string
+            const year = dob.year;
+            const month = String(dob.month).padStart(2, '0');
+            const day = String(dob.day).padStart(2, '0');
+            dobDate = `${year}-${month}-${day}`;
+            console.log(`[VALIDATION] Converted DOB struct to: ${dobDate}`);
+        } else {
+            // It's already a string
+            dobDate = dob;
+        }
+        
+        query = `SELECT patient_name, patient_id FROM \`${projectTable}\`
                  WHERE dob = @dob AND ssn4 = @ssn LIMIT 1`;
-        queryParams = { dob: dob, ssn: ssn4 };
+        queryParams = { dob: dobDate, ssn: ssn4 };
     }
 
     try {
@@ -143,13 +180,13 @@ async function handleValidation(req, res) {
             });
         } else {
             console.log('[VALIDATION] Failed - no matching patient');
-            res.status(200).send({ 
-                sessionInfo: { 
-                    parameters: { 
+            res.status(200).send({
+                sessionInfo: {
+                    parameters: {
                         authenticated: false,
                         validation_error: 'no_match'
-                    } 
-                } 
+                    }
+                }
             });
         }
     } catch (err) {
@@ -160,26 +197,41 @@ async function handleValidation(req, res) {
 
 /**
  * ============================================================================
- * 4. SLOT RETRIEVAL LOGIC (CORRECTED FOR DATE/TIME TYPES)
+ * 4. SLOT RETRIEVAL LOGIC
  * ============================================================================
- * CRITICAL FIXES:
- * - slot_date is DATE type, not STRING (no PARSE_DATE needed)
- * - slot_time is TIME type, use PARSE_TIME() for comparisons
- * - Use native date/time functions
+ * Tag: "getAvailableSlots"
+ *
+ * Required session parameters:
+ *   - department      : department name (must match ALLOWED_DEPARTMENTS)
+ *   - requestType     : "initial" (current week) | "custom_date" (specific date)
+ *
+ * Optional session parameters (for custom_date):
+ *   - preferred_date  : date in YYYY-MM-DD format
+ *   - time_preference : "morning" | "afternoon" | "evening" | etc.
+ *   - time_start      : start time in HH:MM format
+ *   - time_end        : end time in HH:MM format
+ *
+ * Returns session parameters:
+ *   - available_slots : array of { slot_id, slot_date, slot_time }
+ *   - slot_count      : number of slots found
+ *   - has_slots       : true if slots found
+ *   - no_slots        : true if no slots found
+ *   - request_type    : echoes back the requestType
+ *   - searched_date   : echoes back preferred_date if provided
  */
 async function handleSlotRetrieval(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
     const rawDept = params.department || "";
     const dept = rawDept.toLowerCase().trim();
     const requestType = params.requestType || "initial";
-    const preferred_date = params.preferred_date;        // Format: YYYY-MM-DD
+    const preferred_date = params.preferred_date;
     const time_preference = params.time_preference;
-    const time_start = params.time_start;                // Format: HH:MM
+    const time_start = params.time_start;
     const time_end = params.time_end;
-    
-    console.log('[SLOT RETRIEVAL]', { 
-        department: dept, 
-        requestType, 
+
+    console.log('[SLOT RETRIEVAL]', {
+        department: dept,
+        requestType,
         preferred_date,
         time_preference,
         time_start,
@@ -187,9 +239,9 @@ async function handleSlotRetrieval(req, res) {
     });
 
     if (!ALLOWED_DEPARTMENTS.includes(dept)) {
-        console.warn(`[SLOT RETRIEVAL] Unauthorized department: ${dept}`);
+        console.warn(`[SLOT RETRIEVAL] Unauthorized department: "${dept}"`);
         return sendDialogflowResponse(
-            res, 
+            res,
             `I'm sorry, we don't currently have a schedule available for ${rawDept}. ` +
             `Available departments are: ${ALLOWED_DEPARTMENTS.join(', ')}.`
         );
@@ -201,56 +253,46 @@ async function handleSlotRetrieval(req, res) {
     switch (requestType) {
         case "custom_date":
             limit = SLOT_LIMITS.CUSTOM_DATE;
-            
-            // Determine time range
+
             let startTime = null;
             let endTime = null;
-            
+
             if (time_preference && TIME_RANGES[time_preference]) {
                 startTime = TIME_RANGES[time_preference].start;
                 endTime = TIME_RANGES[time_preference].end;
                 console.log(`[SLOT RETRIEVAL] Using time preference: ${time_preference}`);
             } else if (time_start && time_end) {
-                // Ensure TIME format includes seconds (HH:MM:SS)
-                startTime = time_start.includes(':') && time_start.split(':').length === 2 
-                    ? `${time_start}:00` 
-                    : time_start;
-                endTime = time_end.includes(':') && time_end.split(':').length === 2 
-                    ? `${time_end}:00` 
-                    : time_end;
+                // Ensure seconds are included: HH:MM -> HH:MM:SS
+                startTime = time_start.split(':').length === 2 ? `${time_start}:00` : time_start;
+                endTime = time_end.split(':').length === 2 ? `${time_end}:00` : time_end;
                 console.log(`[SLOT RETRIEVAL] Using explicit time range: ${startTime} - ${endTime}`);
             }
-            
+
             if (startTime && endTime) {
-                // ✅ CORRECTED: Direct comparison with TIME type
                 query = `
-                    SELECT slot_id, slot_date, slot_time 
+                    SELECT slot_id, slot_date, slot_time
                     FROM \`${tableName}\`
-                    WHERE status = 'Available' 
+                    WHERE status = 'Available'
                     AND slot_date = @preferred_date
                     AND slot_time >= PARSE_TIME('%H:%M:%S', @start_time)
                     AND slot_time < PARSE_TIME('%H:%M:%S', @end_time)
-                    ORDER BY slot_time ASC 
+                    ORDER BY slot_time ASC
                     LIMIT @limit`;
-                queryParams = { 
-                    preferred_date: preferred_date,
+                queryParams = {
+                    preferred_date,
                     start_time: startTime,
                     end_time: endTime,
-                    limit: limit
+                    limit
                 };
             } else {
-                // ✅ CORRECTED: slot_date is already DATE type
                 query = `
-                    SELECT slot_id, slot_date, slot_time 
+                    SELECT slot_id, slot_date, slot_time
                     FROM \`${tableName}\`
-                    WHERE status = 'Available' 
+                    WHERE status = 'Available'
                     AND slot_date = @preferred_date
-                    ORDER BY slot_time ASC 
+                    ORDER BY slot_time ASC
                     LIMIT @limit`;
-                queryParams = { 
-                    preferred_date: preferred_date,
-                    limit: limit
-                };
+                queryParams = { preferred_date, limit };
             }
             break;
 
@@ -258,35 +300,38 @@ async function handleSlotRetrieval(req, res) {
         default:
             limit = SLOT_LIMITS.INITIAL;
             console.log('[SLOT RETRIEVAL] Querying CURRENT WEEK slots');
-            
-            // ✅ CORRECTED: slot_date is DATE type, use direct comparison
+
             query = `
-                SELECT slot_id, slot_date, slot_time 
+                SELECT slot_id, slot_date, slot_time
                 FROM \`${tableName}\`
                 WHERE status = 'Available'
                 AND slot_date >= CURRENT_DATE()
                 AND slot_date < DATE_ADD(DATE_TRUNC(CURRENT_DATE(), WEEK(MONDAY)), INTERVAL 7 DAY)
-                ORDER BY slot_date ASC, slot_time ASC 
+                ORDER BY slot_date ASC, slot_time ASC
                 LIMIT @limit`;
-            queryParams = { limit: limit };
+            queryParams = { limit };
             break;
     }
 
     try {
-        const [slots] = await bigquery.query({ 
-            query, 
-            params: queryParams
-        });
-        
+        const [slots] = await bigquery.query({ query, params: queryParams });
+
         console.log(`[SLOT RETRIEVAL] Found ${slots.length} slots`);
-        
+
+        // Transform BigQuery DATE/TIME objects to strings
+        const transformedSlots = slots.map(slot => ({
+            slot_id: slot.slot_id,
+            slot_date: slot.slot_date?.value || slot.slot_date,
+            slot_time: slot.slot_time?.value || slot.slot_time
+        }));
+
         res.status(200).send({
             sessionInfo: {
-                parameters: { 
-                    available_slots: slots,
-                    slot_count: slots.length,
-                    has_slots: slots.length > 0,
-                    no_slots: slots.length === 0,
+                parameters: {
+                    available_slots: transformedSlots,
+                    slot_count: transformedSlots.length,
+                    has_slots: transformedSlots.length > 0,
+                    no_slots: transformedSlots.length === 0,
                     request_type: requestType,
                     searched_date: preferred_date || null
                 }
@@ -294,9 +339,9 @@ async function handleSlotRetrieval(req, res) {
         });
     } catch (err) {
         console.error("[SLOT RETRIEVAL ERROR]:", err);
-        res.status(500).send({ 
+        res.status(500).send({
             error: "Failed to fetch slots",
-            details: err.message 
+            details: err.message
         });
     }
 }
@@ -305,22 +350,34 @@ async function handleSlotRetrieval(req, res) {
  * ============================================================================
  * 5. BOOKING LOGIC
  * ============================================================================
+ * Tag: "bookSlot"
+ *
+ * Required session parameters:
+ *   - department : department name (must match ALLOWED_DEPARTMENTS)
+ *   - slot_id    : ID of the slot to book
+ *   - patient_id : ID of the patient
+ *
+ * Returns session parameters:
+ *   - booking_success    : true if booking succeeded
+ *   - booked_slot_id     : slot ID that was booked
+ *   - booked_slot_date   : date of the booked slot
+ *   - booked_slot_time   : time of the booked slot
  */
 async function handleBooking(req, res) {
     const params = req.body.sessionInfo?.parameters || {};
     const department = params.department;
     const slot_id = params.slot_id;
     const patient_id = params.patient_id;
-    
-    console.log('[BOOKING ATTEMPT]', { 
-        department, 
-        slot_id, 
+
+    console.log('[BOOKING ATTEMPT]', {
+        department,
+        slot_id,
         patient_id: patient_id ? '***' : 'missing'
     });
-    
+
     const dept = department?.toLowerCase().trim();
     if (!dept || !ALLOWED_DEPARTMENTS.includes(dept)) {
-        console.warn(`[BOOKING] Invalid department: ${dept}`);
+        console.warn(`[BOOKING] Invalid department: "${dept}"`);
         return sendDialogflowResponse(res, "Invalid department specified for booking.");
     }
 
@@ -328,18 +385,18 @@ async function handleBooking(req, res) {
         console.warn('[BOOKING] Missing required fields');
         return sendDialogflowResponse(res, "Missing slot ID or patient information.");
     }
-    
+
     const tableName = `${PROJECT_ID}.${DATASET_ID}.${dept}_slots`;
     const query = `
         UPDATE \`${tableName}\`
         SET status = 'Booked', patient_id = @pid
         WHERE slot_id = @sid AND status = 'Available'`;
-    
+
     const options = {
-        query: query,
+        query,
         params: { pid: patient_id, sid: slot_id }
     };
-    
+
     try {
         const [job] = await bigquery.createQueryJob(options);
         console.log(`[BOOKING] Job ${job.id} started`);
@@ -351,41 +408,56 @@ async function handleBooking(req, res) {
         console.log(`[BOOKING] Rows updated: ${rowsAffected}`);
 
         if (rowsAffected > 0) {
-            console.log(`[BOOKING] SUCCESS`);
-            
+            console.log('[BOOKING] SUCCESS');
+
             const detailQuery = `
                 SELECT slot_id, slot_date, slot_time, patient_id
                 FROM \`${tableName}\`
                 WHERE slot_id = @sid LIMIT 1`;
-            
-            const [slotDetails] = await bigquery.query({ 
-                query: detailQuery, 
+
+            const [slotDetails] = await bigquery.query({
+                query: detailQuery,
                 params: { sid: slot_id }
             });
-            
-            res.status(200).send({ 
-                sessionInfo: { 
-                    parameters: { 
-                        booking_success: true,
-                        booked_slot_id: slot_id,
-                        booked_slot_date: slotDetails[0]?.slot_date?.value || null,
-                        booked_slot_time: slotDetails[0]?.slot_time?.value || null
-                    } 
-                } 
-            });
+
+            if (slotDetails && slotDetails.length > 0) {
+                const slot = slotDetails[0];
+                
+                res.status(200).send({
+                    sessionInfo: {
+                        parameters: {
+                            booking_success: true,
+                            booked_slot_id: slot_id,
+                            booked_slot_date: slot.slot_date?.value || slot.slot_date || null,
+                            booked_slot_time: slot.slot_time?.value || slot.slot_time || null
+                        }
+                    }
+                });
+            } else {
+                // Fallback if no details returned (shouldn't happen)
+                console.warn('[BOOKING] Detail query returned no rows');
+                res.status(200).send({
+                    sessionInfo: {
+                        parameters: {
+                            booking_success: true,
+                            booked_slot_id: slot_id,
+                            booked_slot_date: null,
+                            booked_slot_time: null
+                        }
+                    }
+                });
+            }
         } else {
-            console.warn(`[BOOKING] FAILED - Slot not available`);
-            
+            console.warn('[BOOKING] FAILED - Slot not available');
             sendDialogflowResponse(
-                res, 
+                res,
                 "I'm sorry, that slot is no longer available. Please select a different time."
             );
         }
-
     } catch (err) {
         console.error("[BOOKING ERROR]:", err);
         sendDialogflowResponse(
-            res, 
+            res,
             "We encountered a technical issue while booking. Please try again."
         );
     }
