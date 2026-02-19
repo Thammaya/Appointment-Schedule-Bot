@@ -1,0 +1,309 @@
+Tool name: getAvailableSlots
+
+Type: OpenAPI
+
+Description:
+Use this tool to retrieve available appointment slots for a specific medical department from the scheduling database.
+Initial Search: Call with requestType: "initial" to fetch slots for the current week.
+Custom Search: Call with requestType: "custom_date" when the patient provides a specific date (preferred_date).
+Filtering: You can narrow results using time_preference (morning, afternoon, evening) or explicit time_start and time_end ranges in HH:MM:SS format.
+Validation: Always check the has_slots boolean in the response before presenting options. Only present slots returned in the available_slots array; do not speculate on availability.
+
+YAML Schema:
+openapi: 3.0.0
+
+info:
+  title: Get Available Appointment Slots
+  description: >
+    OpenAPI specification for the getAvailableSlots tool used by the
+    Google Dialogflow CX Agent Playbook. Retrieves available appointment
+    slots for a given department from BigQuery via a Cloud Run Function.
+    Supports current-week retrieval and custom date filtering with optional
+    time-of-day preferences.
+  version: 1.0.0
+
+servers:
+  - url: https://appointmentwebhook-137470913560.us-east1.run.app
+    description: Cloud Run Functions - Production
+
+paths:
+  /:
+    post:
+      operationId: getAvailableSlots
+      summary: Retrieve available appointment slots
+      description: >
+        Retrieves available appointment slots for a given department.
+        Supports two retrieval modes:
+        - "initial": returns available slots for the current week.
+        - "custom_date": returns slots for a specific date with optional
+          time-of-day filtering via time_preference or explicit
+          time_start / time_end range.
+        The tag field in fulfillmentInfo must be set to "getAvailableSlots".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetAvailableSlotsRequest'
+            examples:
+              initial_request:
+                summary: Current week slot request
+                value:
+                  fulfillmentInfo:
+                    tag: getAvailableSlots
+                  sessionInfo:
+                    parameters:
+                      department: cardiology
+                      requestType: initial
+              custom_date_with_preference:
+                summary: Custom date with time preference
+                value:
+                  fulfillmentInfo:
+                    tag: getAvailableSlots
+                  sessionInfo:
+                    parameters:
+                      department: cardiology
+                      requestType: custom_date
+                      preferred_date: "2026-02-20"
+                      time_preference: morning
+              custom_date_with_range:
+                summary: Custom date with explicit time range
+                value:
+                  fulfillmentInfo:
+                    tag: getAvailableSlots
+                  sessionInfo:
+                    parameters:
+                      department: cardiology
+                      requestType: custom_date
+                      preferred_date: "2026-02-20"
+                      time_start: "09:00"
+                      time_end: "12:00"
+      responses:
+        '200':
+          description: Slot retrieval successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAvailableSlotsResponse'
+              examples:
+                slots_found:
+                  summary: Slots returned successfully
+                  value:
+                    sessionInfo:
+                      parameters:
+                        available_slots:
+                          - slot_id: CARD_20260220_0900
+                            slot_date: "2026-02-20"
+                            slot_time: "09:00:00"
+                          - slot_id: CARD_20260220_1030
+                            slot_date: "2026-02-20"
+                            slot_time: "10:30:00"
+                        slot_count: 2
+                        has_slots: true
+                        no_slots: false
+                        request_type: custom_date
+                        searched_date: "2026-02-20"
+                no_slots_found:
+                  summary: No slots available
+                  value:
+                    sessionInfo:
+                      parameters:
+                        available_slots: []
+                        slot_count: 0
+                        has_slots: false
+                        no_slots: true
+                        request_type: initial
+                        searched_date: null
+        '500':
+          description: Internal server error — BigQuery or system failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+
+    # -------------------------------------------------------------------------
+    # REQUEST
+    # -------------------------------------------------------------------------
+    GetAvailableSlotsRequest:
+      type: object
+      required:
+        - fulfillmentInfo
+        - sessionInfo
+      properties:
+        fulfillmentInfo:
+          $ref: '#/components/schemas/FulfillmentInfo'
+        sessionInfo:
+          type: object
+          required:
+            - parameters
+          properties:
+            parameters:
+              $ref: '#/components/schemas/GetAvailableSlotsParams'
+
+    FulfillmentInfo:
+      type: object
+      required:
+        - tag
+      properties:
+        tag:
+          type: string
+          description: Must be set to "getAvailableSlots" to route to the correct handler.
+          enum:
+            - getAvailableSlots
+          example: getAvailableSlots
+
+    GetAvailableSlotsParams:
+      type: object
+      required:
+        - department
+      properties:
+        department:
+          type: string
+          description: Target medical department (case-insensitive).
+          enum:
+            - cardiology
+            - orthopedics
+            - pediatrics
+            - radiology
+            - neurology
+            - endocrinology
+            - dermatology
+          example: cardiology
+        requestType:
+          type: string
+          description: >
+            Slot retrieval mode.
+            "initial" retrieves slots for the current week (default).
+            "custom_date" retrieves slots for a specific date.
+          enum:
+            - initial
+            - custom_date
+          default: initial
+          example: initial
+        preferred_date:
+          type: string
+          description: >
+            Target date for slot retrieval. Required when requestType
+            is "custom_date". Format: YYYY-MM-DD. Example: 2026-02-20.
+          example: "2026-02-20"
+        time_preference:
+          type: string
+          description: >
+            Named time-of-day range for filtering slots.
+            Takes precedence over time_start / time_end if both are provided.
+          enum:
+            - morning
+            - afternoon
+            - evening
+            - early_morning
+            - late_afternoon
+          example: morning
+        time_start:
+          type: string
+          description: >
+            Explicit start time for filtering. Format: HH:MM (24-hour).
+            Used only when time_preference is not provided.
+            Example: 09:00.
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          example: "09:00"
+        time_end:
+          type: string
+          description: >
+            Explicit end time for filtering. Format: HH:MM (24-hour).
+            Used only when time_preference is not provided.
+            Example: 12:00.
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          example: "12:00"
+
+    # -------------------------------------------------------------------------
+    # RESPONSE
+    # -------------------------------------------------------------------------
+    GetAvailableSlotsResponse:
+      type: object
+      properties:
+        sessionInfo:
+          type: object
+          properties:
+            parameters:
+              $ref: '#/components/schemas/GetAvailableSlotsResponseParams'
+
+    GetAvailableSlotsResponseParams:
+      type: object
+      properties:
+        available_slots:
+          type: array
+          description: List of available appointment slots.
+          items:
+            $ref: '#/components/schemas/Slot'
+        slot_count:
+          type: integer
+          description: Total number of available slots returned.
+          example: 2
+        has_slots:
+          type: boolean
+          description: True if one or more slots were found.
+          example: true
+        no_slots:
+          type: boolean
+          description: True if no slots were found.
+          example: false
+        request_type:
+          type: string
+          description: Echoes back the requestType used in the request.
+          example: initial
+        searched_date:
+          type: string
+          nullable: true
+          description: >
+            Echoes back preferred_date if provided, otherwise null.
+            Format: YYYY-MM-DD. Example: 2026-02-20.
+          example: "2026-02-20"
+
+    Slot:
+      type: object
+      properties:
+        slot_id:
+          type: string
+          description: Unique identifier for the slot.
+          example: CARD_20260220_0900
+        slot_date:
+          type: string
+          description: >
+            Date of the slot. Format: YYYY-MM-DD. Example: 2026-02-20.
+          example: "2026-02-20"
+        slot_time:
+          type: string
+          description: >
+            Time of the slot. Format: HH:MM:SS (24-hour). Example: 09:00:00.
+          example: "09:00:00"
+
+    # -------------------------------------------------------------------------
+    # ERROR
+    # -------------------------------------------------------------------------
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: Failed to fetch slots
+        details:
+          type: string
+          description: Technical error details for debugging.
+          example: "Table not found: appointment_system.cardiology_slots"
+
+  securitySchemes:
+    googleIdToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Google-signed ID token for authenticating requests to the
+        Cloud Run Function. Configure via webhook authentication
+        settings in Dialogflow CX.
+
+security:
+  - googleIdToken: []
