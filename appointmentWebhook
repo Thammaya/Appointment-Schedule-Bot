@@ -4,7 +4,7 @@
  * ============================================================================
  * Uses @google-cloud/functions-framework for Cloud Run Functions.
  * Routes requests using fulfillmentInfo.tag from Dialogflow CX request body.
- *
+ * Function entry point: appointmentWebhook
  * Single Webhook URL in Dialogflow CX:
  *   https://appointmentwebhook-137470913560.us-east1.run.app
  *
