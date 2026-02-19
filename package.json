@@ -4,13 +4,14 @@
   "description": "Dialogflow CX webhook for medical appointment booking system",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "functions-framework --target=appointmentWebhook",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
     "@google-cloud/bigquery": "^7.3.0"
   },
   "devDependencies": {},
@@ -20,7 +21,5 @@
     "bigquery",
     "appointment",
     "healthcare"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  ]
 }
