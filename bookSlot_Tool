@@ -1,0 +1,267 @@
+Tool Name: bookSlot
+Type: OpenAPI
+Description:
+Use this tool to book a specific appointment slot for a validated patient.
+Call this tool only after the patient has reviewed the available slots,
+selected a preferred slot, and explicitly confirmed their choice. Requires
+department, slot_id, and patient_id to be present in session. Do not call
+this tool speculatively — it performs a live write to the database and
+cannot be undone automatically.
+YAML Schema:
+openapi: 3.0.0
+
+info:
+  title: Book Appointment Slot
+  description: >
+    OpenAPI specification for the bookSlot tool used by the
+    Google Dialogflow CX Agent Playbook. Books a selected appointment
+    slot for a validated patient by performing an atomic UPDATE on the
+    slot record in BigQuery via a Cloud Run Function. Patient identity
+    is assumed to have been verified prior to calling this tool.
+  version: 1.0.0
+
+servers:
+  - url: https://appointmentwebhook-137470913560.us-east1.run.app
+    description: Cloud Run Functions - Production
+
+paths:
+  /:
+    post:
+      operationId: bookSlot
+      summary: Book a selected appointment slot
+      description: >
+        Books a specific appointment slot for a validated patient.
+        Performs an atomic UPDATE on the slot record, setting status
+        to "Booked" and associating the patient_id. Returns booking
+        confirmation details including the confirmed date and time.
+        Returns a fulfillment_response message if the slot is no
+        longer available.
+        The tag field in fulfillmentInfo must be set to "bookSlot".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookSlotRequest'
+            examples:
+              book_cardiology_slot:
+                summary: Book a cardiology slot
+                value:
+                  fulfillmentInfo:
+                    tag: bookSlot
+                  sessionInfo:
+                    parameters:
+                      department: cardiology
+                      slot_id: CARD_20260220_0900
+                      patient_id: P12345
+      responses:
+        '200':
+          description: >
+            Booking attempt completed. Inspect booking_success in
+            sessionInfo.parameters to determine the outcome.
+            If the slot was taken, a fulfillment_response message
+            is returned instead of sessionInfo parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookSlotResponse'
+              examples:
+                booking_success:
+                  summary: Slot booked successfully
+                  value:
+                    sessionInfo:
+                      parameters:
+                        booking_success: true
+                        booked_slot_id: CARD_20260220_0900
+                        booked_slot_date: "2026-02-20"
+                        booked_slot_time: "09:00:00"
+                booking_failed_slot_taken:
+                  summary: Slot no longer available
+                  value:
+                    fulfillment_response:
+                      messages:
+                        - text:
+                            text:
+                              - "I'm sorry, that slot is no longer available. Please select a different time."
+                booking_failed_missing_fields:
+                  summary: Missing required session parameters
+                  value:
+                    fulfillment_response:
+                      messages:
+                        - text:
+                            text:
+                              - "Missing slot ID or patient information."
+        '500':
+          description: Internal server error — BigQuery or system failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+
+    # -------------------------------------------------------------------------
+    # REQUEST
+    # -------------------------------------------------------------------------
+    BookSlotRequest:
+      type: object
+      required:
+        - fulfillmentInfo
+        - sessionInfo
+      properties:
+        fulfillmentInfo:
+          $ref: '#/components/schemas/FulfillmentInfo'
+        sessionInfo:
+          type: object
+          required:
+            - parameters
+          properties:
+            parameters:
+              $ref: '#/components/schemas/BookSlotParams'
+
+    FulfillmentInfo:
+      type: object
+      required:
+        - tag
+      properties:
+        tag:
+          type: string
+          description: Must be set to "bookSlot" to route to the correct handler.
+          enum:
+            - bookSlot
+          example: bookSlot
+
+    BookSlotParams:
+      type: object
+      required:
+        - department
+        - slot_id
+        - patient_id
+      properties:
+        department:
+          type: string
+          description: >
+            Target medical department. Must match one of the allowed
+            departments configured in the Cloud Run Function.
+          enum:
+            - cardiology
+            - orthopedics
+            - pediatrics
+            - radiology
+            - neurology
+            - endocrinology
+            - dermatology
+          example: cardiology
+        slot_id:
+          type: string
+          description: >
+            Unique ID of the slot to book. Must be obtained from a
+            prior getAvailableSlots call and confirmed by the patient
+            before this tool is invoked.
+          example: CARD_20260220_0900
+        patient_id:
+          type: string
+          description: >
+            Unique patient identifier. Available in session from the
+            patient validation flow. Never re-collected in the playbook.
+          example: P12345
+
+    # -------------------------------------------------------------------------
+    # RESPONSE
+    # -------------------------------------------------------------------------
+    BookSlotResponse:
+      type: object
+      description: >
+        One of two response shapes is returned:
+        1. sessionInfo with parameters when booking succeeds.
+        2. fulfillment_response with a direct user message when the
+           slot is taken or required fields are missing.
+      properties:
+        sessionInfo:
+          type: object
+          properties:
+            parameters:
+              $ref: '#/components/schemas/BookSlotResponseParams'
+        fulfillment_response:
+          $ref: '#/components/schemas/FulfillmentResponse'
+
+    BookSlotResponseParams:
+      type: object
+      properties:
+        booking_success:
+          type: boolean
+          description: >
+            True if the slot was successfully booked.
+            False if the slot was already taken by another patient.
+          example: true
+        booked_slot_id:
+          type: string
+          description: ID of the slot that was booked.
+          example: CARD_20260220_0900
+        booked_slot_date:
+          type: string
+          nullable: true
+          description: >
+            Date of the booked slot. Format: YYYY-MM-DD. Example: 2026-02-20.
+          example: "2026-02-20"
+        booked_slot_time:
+          type: string
+          nullable: true
+          description: >
+            Time of the booked slot. Format: HH:MM:SS (24-hour). Example: 09:00:00.
+          example: "09:00:00"
+
+    # -------------------------------------------------------------------------
+    # SHARED
+    # -------------------------------------------------------------------------
+    FulfillmentResponse:
+      type: object
+      description: >
+        Direct user-facing message returned when the slot is taken
+        or required parameters are missing.
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: object
+                properties:
+                  text:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - "I'm sorry, that slot is no longer available. Please select a different time."
+
+    # -------------------------------------------------------------------------
+    # ERROR
+    # -------------------------------------------------------------------------
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: Booking failed due to a system error
+        details:
+          type: string
+          description: Technical error details for debugging.
+          example: "UPDATE statement failed on cardiology_slots"
+
+  securitySchemes:
+    googleIdToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Google-signed ID token for authenticating requests to the
+        Cloud Run Function. Configure via webhook authentication
+        settings in Dialogflow CX.
+
+security:
+  - googleIdToken: []
+
+
